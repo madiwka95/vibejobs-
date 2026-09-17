@@ -22,6 +22,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 VERSION = "0.1.0"
 UA = f"VibeJobs/{VERSION} (pet-project; contact: you@example.com)"
@@ -315,12 +316,21 @@ def load_telegram(path="telegram_vacancies.json"):
 
 def collect(query="python junior", tg_path="telegram_vacancies.json", per_page=30):
     """Только реальные источники: hh.ru API + Habr Career + Telegram-импорт. Без демо-данных."""
-    all_jobs = []
-    all_jobs += fetch_hh(query, per_page=per_page)
-    # habr дёргаем коротким запросом (первое слово), чтобы не спамить
     short_q = (query.split() or ["python"])[0]
-    all_jobs += fetch_habr(short_q)
-    all_jobs += load_telegram(tg_path)
+    tasks = [("hh", fetch_hh, (query,), {"per_page": per_page}),
+             ("habr", fetch_habr, (short_q,), {})]
+    if query.strip().lower() != short_q.lower():
+        # вторым запросом добираем Habr шире: точное совпадение фразы тоже ищется
+        tasks.append(("habr-full", fetch_habr, (query,), {}))
+    tasks.append(("telegram", load_telegram, (tg_path,), {}))
+    all_jobs = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs = {pool.submit(fn, *a, **kw): name for name, fn, a, kw in tasks}
+        for fut in as_completed(futs):
+            try:
+                all_jobs += fut.result()
+            except Exception as e:
+                print(f"[!] источник {futs[fut]} упал: {e}")
     if not all_jobs:
         print("[!] Все источники пустые: проверьте интернет и telegram_vacancies.json")
     # дедуп по url
@@ -334,7 +344,7 @@ def collect(query="python junior", tg_path="telegram_vacancies.json", per_page=3
     return uniq
 
 
-def filter_jobs(jobs, stack="", remote_only=False, junior_only=False, source="", text=""):
+def filter_jobs(jobs, stack="", remote_only=False, junior_only=False, source="", text="", salary_min=0):
     text = (text or "").lower()
     out = []
     for j in jobs:
@@ -349,6 +359,10 @@ def filter_jobs(jobs, stack="", remote_only=False, junior_only=False, source="",
             continue
         if source and j["source"] != source:
             continue
+        if salary_min:
+            top = max(j.get("salary_from") or 0, j.get("salary_to") or 0)
+            if top < salary_min:
+                continue  # без зарплаты тоже отсеиваем при активном фильтре
         if text and text not in (j["title"] + " " + j["company"] + " " + j["desc"]).lower():
             continue
         out.append(j)

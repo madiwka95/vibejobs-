@@ -10,7 +10,8 @@
 Роуты:
   GET /                      -> index.html
   GET /api/jobs?...          -> JSON {count, jobs}
-      params: q, stack, remote(1), junior(1), source, sort(vibe|fresh)
+      params: q, stack, remote(1), junior(1), source, sort(vibe|fresh),
+              text, salary_min (число, рубли)
   GET /api/stacks            -> JSON {stacks: [...]}
   GET /api/refresh           -> пересобрать кэш принудительно
 """
@@ -105,6 +106,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/jobs":
             q = one("q", self.server.default_query)
             jobs = get_jobs(q or self.server.default_query)
+            try:
+                salary_min = int(one("salary_min", "") or 0)
+            except ValueError:
+                salary_min = 0
             jobs = collector.filter_jobs(
                 jobs,
                 stack=one("stack", ""),
@@ -112,6 +117,7 @@ class Handler(BaseHTTPRequestHandler):
                 junior_only=one("junior", "") == "1",
                 source=one("source", ""),
                 text=one("text", ""),
+                salary_min=salary_min,
             )
             if one("sort", "vibe") == "fresh":
                 jobs = sorted(jobs, key=lambda j: j.get("published", ""), reverse=True)
